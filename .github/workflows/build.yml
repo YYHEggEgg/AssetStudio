@@ -1,4 +1,4 @@
-name: AssetStudioBuild
+name: GSBuild
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: microsoft/setup-msbuild@v1.1
-      
+
       - name: Download FBX SDK
         run: |
           md fbx
@@ -25,10 +25,9 @@ jobs:
           Invoke-WebRequest "https://damassets.autodesk.net/content/dam/autodesk/www/adn/fbx/2020-2-1/fbx202021_fbxsdk_vs2019_pdbs.exe" -OutFile "fbxpdb.exe"
           Start-Process -FilePath "fbxpdb.exe" /S -Wait
           cd ..
-
       - name: Nuget Restore
         run: nuget restore
-      
+
       - name: Build .Net472
         run: msbuild /p:Configuration=Release /p:TargetFramework=net472 /verbosity:minimal
 

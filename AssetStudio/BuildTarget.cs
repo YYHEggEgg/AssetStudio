@@ -8,8 +8,7 @@ namespace AssetStudio
     public enum BuildTarget
     {
         NoTarget = -2,
-        AnyPlayer = -1,
-        ValidPlayer = 1,
+        DashboardWidget = 1,
         StandaloneOSX = 2,
         StandaloneOSXPPC = 3,
         StandaloneOSXIntel = 4,
@@ -20,10 +19,8 @@ namespace AssetStudio
         iOS = 9,
         PS3,
         XBOX360,
-        Broadcom = 12,
         Android = 13,
         StandaloneGLESEmu = 14,
-        StandaloneGLES20Emu = 15,
         NaCl = 16,
         StandaloneLinux = 17,
         FlashPlayer = 18,
@@ -51,8 +48,6 @@ namespace AssetStudio
         GameCoreXboxSeries,
         GameCoreXboxOne,
         PS5,
-        EmbeddedLinux,
-        QNX,
         UnknownPlatform = 9999
     }
 }

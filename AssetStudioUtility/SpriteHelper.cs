@@ -58,23 +58,23 @@ namespace AssetStudio
                         //RotateAndFlip
                         switch (settingsRaw.packingRotation)
                         {
-                            case SpritePackingRotation.FlipHorizontal:
+                            case SpritePackingRotation.kSPRFlipHorizontal:
                                 spriteImage.Mutate(x => x.Flip(FlipMode.Horizontal));
                                 break;
-                            case SpritePackingRotation.FlipVertical:
+                            case SpritePackingRotation.kSPRFlipVertical:
                                 spriteImage.Mutate(x => x.Flip(FlipMode.Vertical));
                                 break;
-                            case SpritePackingRotation.Rotate180:
+                            case SpritePackingRotation.kSPRRotate180:
                                 spriteImage.Mutate(x => x.Rotate(180));
                                 break;
-                            case SpritePackingRotation.Rotate90:
+                            case SpritePackingRotation.kSPRRotate90:
                                 spriteImage.Mutate(x => x.Rotate(270));
                                 break;
                         }
                     }
 
                     //Tight
-                    if (settingsRaw.packingMode == SpritePackingMode.Tight)
+                    if (settingsRaw.packingMode == SpritePackingMode.kSPMTight)
                     {
                         try
                         {

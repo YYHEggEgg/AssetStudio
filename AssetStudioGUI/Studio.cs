@@ -35,6 +35,7 @@ namespace AssetStudioGUI
     internal static class Studio
     {
         public static AssetsManager assetsManager = new AssetsManager();
+        public static AIVersionManager versionManager = new AIVersionManager();
         public static AssemblyLoader assemblyLoader = new AssemblyLoader();
         public static List<AssetItem> exportableAssets = new List<AssetItem>();
         public static List<AssetItem> visibleAssets = new List<AssetItem>();
@@ -77,6 +78,8 @@ namespace AssetStudioGUI
                 extractedCount += ExtractBundleFile(reader, savePath);
             else if (reader.FileType == FileType.WebFile)
                 extractedCount += ExtractWebDataFile(reader, savePath);
+            else if (reader.FileType == FileType.BlkFile)
+                extractedCount += ExtractBlkFile(reader, savePath);
             else
                 reader.Dispose();
             return extractedCount;
@@ -104,6 +107,23 @@ namespace AssetStudioGUI
             {
                 var extractPath = Path.Combine(savePath, reader.FileName + "_unpacked");
                 return ExtractStreamFile(extractPath, webFile.fileList);
+            }
+            return 0;
+        }
+
+        private static int ExtractBlkFile(FileReader reader, string savePath)
+        {
+            BlkFile blkFile;
+            StatusStripUpdate($"Decompressing {reader.FileName} ...");
+
+            using (reader)
+                blkFile = new BlkFile(reader);
+
+            var fileList = blkFile.Files.SelectMany(x => x.fileList).ToList();
+            if (fileList.Count > 0)
+            {
+                var extractPath = Path.Combine(savePath, Path.GetFileNameWithoutExtension(reader.FileName));
+                return ExtractStreamFile(extractPath, fileList.ToArray());
             }
             return 0;
         }
@@ -215,16 +235,59 @@ namespace AssetStudioGUI
                                 var preloadEnd = preloadIndex + preloadSize;
                                 for (int k = preloadIndex; k < preloadEnd; k++)
                                 {
+                                    if (long.TryParse(m_Container.Key, out var containerValue))
+                                    {
+                                        var last = unchecked((uint)containerValue);
+                                        var path = ResourceIndex.GetBundlePath(last);
+                                        if (!string.IsNullOrEmpty(path))
+                                        {
+                                            containers.Add((m_AssetBundle.m_PreloadTable[k], path));
+                                            continue;
+                                        }
+                                    }
                                     containers.Add((m_AssetBundle.m_PreloadTable[k], m_Container.Key));
                                 }
                             }
                             assetItem.Text = m_AssetBundle.m_Name;
+                            exportable = AssetBundle.Exportable;
+                            break;
+                        case IndexObject m_IndexObject:
+                            assetItem.Text = "IndexObject";
+                            exportable = IndexObject.Exportable;
                             break;
                         case ResourceManager m_ResourceManager:
                             foreach (var m_Container in m_ResourceManager.m_Container)
                             {
                                 containers.Add((m_Container.Value, m_Container.Key));
                             }
+                            break;
+                        case MiHoYoBinData m_MiHoYoBinData:
+                            if (m_MiHoYoBinData.assetsFile.ObjectsDic.TryGetValue(2, out var obj) && obj is IndexObject indexObject)
+                            {
+                                if (indexObject.Names.TryGetValue(m_MiHoYoBinData.m_PathID, out var binName))
+                                {
+                                    string path = "";
+                                    if (Path.GetExtension(assetsFile.originalPath) == ".blk")
+                                    {
+                                        var blkName = Path.GetFileNameWithoutExtension(assetsFile.originalPath);
+                                        var blk = Convert.ToUInt64(blkName);
+                                        var lastHex = uint.Parse(binName, NumberStyles.HexNumber);
+                                        var blkHash = (blk << 32) | lastHex;
+                                        var index = ResourceIndex.GetAssetIndex(blkHash);
+                                        var bundleInfo = ResourceIndex.GetBundleInfo(index);
+                                        path = bundleInfo != null ? bundleInfo.Path : "";
+                                    }
+                                    else
+                                    {
+                                        var last = uint.Parse(binName, NumberStyles.HexNumber);
+                                        path = ResourceIndex.GetBundlePath(last) ?? "";
+                                    }
+                                    assetItem.Container = path;
+                                    assetItem.Text = !string.IsNullOrEmpty(path) ? Path.GetFileName(path) : binName;
+                                } 
+                            }
+                            else assetItem.Text = string.Format("BinFile #{0}", assetItem.m_PathID);
+                            exportable = true;
                             break;
                         case NamedObject m_NamedObject:
                             assetItem.Text = m_NamedObject.m_Name;
@@ -392,11 +455,19 @@ namespace AssetStudioGUI
                         case 1: //container path
                             if (!string.IsNullOrEmpty(asset.Container))
                             {
-                                exportPath = Path.Combine(savePath, Path.GetDirectoryName(asset.Container));
+                                if (int.TryParse(asset.Container, out _))
+                                {
+                                    exportPath = Path.Combine(savePath, asset.Container);
+                                }
+                                else
+                                {
+                                    exportPath = Path.Combine(savePath, Path.GetDirectoryName(asset.Container));
+                                }
+                                
                             }
                             else
                             {
-                                exportPath = savePath;
+                                exportPath = Path.Combine(savePath, asset.TypeString);
                             }
                             break;
                         case 2: //source file
@@ -486,6 +557,7 @@ namespace AssetStudioGUI
                                         new XElement("Type", new XAttribute("id", (int)asset.Type), asset.TypeString),
                                         new XElement("PathID", asset.m_PathID),
                                         new XElement("Source", asset.SourceFile.fullName),
+                                        new XElement("OriginalPath", asset.SourceFile.originalPath),
                                         new XElement("Size", asset.FullSize)
                                     )
                                 )

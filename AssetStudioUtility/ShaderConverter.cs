@@ -10,29 +10,37 @@ namespace AssetStudio
 {
     public static class ShaderConverter
     {
-        public static string Convert(this Shader shader)
+        public static byte[] Convert(this Shader shader)
         {
-            if (shader.m_SubProgramBlob != null) //5.3 - 5.4
+            using(var ms = new MemoryStream())
+            using(TextWriter writer = new StreamWriter(ms))
             {
-                var decompressedBytes = new byte[shader.decompressedSize];
-                LZ4Codec.Decode(shader.m_SubProgramBlob, decompressedBytes);
-                using (var blobReader = new BinaryReader(new MemoryStream(decompressedBytes)))
+                writer.Write(header);
+                if (shader.m_SubProgramBlob != null) //5.3 - 5.4
                 {
-                    var program = new ShaderProgram(blobReader, shader.version);
-                    program.Read(blobReader, 0);
-                    return header + program.Export(Encoding.UTF8.GetString(shader.m_Script));
+                    var decompressedBytes = new byte[shader.decompressedSize];
+                    LZ4Codec.Decode(shader.m_SubProgramBlob, decompressedBytes);
+                    using (var blobReader = new EndianBinaryReader(new MemoryStream(decompressedBytes), EndianType.LittleEndian))
+                    {
+                        var program = new ShaderProgram(blobReader, shader.version);
+                        program.Read(blobReader, 0);
+                        writer.Write(program.Export(Encoding.UTF8.GetString(shader.m_Script)));
+                        return ms.ToArray();
+                    }
                 }
-            }
 
-            if (shader.compressedBlob != null) //5.5 and up
-            {
-                return header + ConvertSerializedShader(shader);
-            }
+                if (shader.compressedBlob != null) //5.5 and up
+                {
+                    ConvertSerializedShader(shader, writer);
+                    return ms.ToArray();
+                }
 
-            return header + Encoding.UTF8.GetString(shader.m_Script);
+                writer.Write(Encoding.UTF8.GetString(shader.m_Script));
+                return ms.ToArray();
+            }
         }
 
-        private static string ConvertSerializedShader(Shader shader)
+        private static void ConvertSerializedShader(Shader shader, TextWriter writer)
         {
             var length = shader.platforms.Length;
             var shaderPrograms = new ShaderProgram[length];
@@ -41,11 +49,10 @@ namespace AssetStudio
                 for (var j = 0; j < shader.offsets[i].Length; j++)
                 {
                     var offset = shader.offsets[i][j];
-                    var compressedLength = shader.compressedLengths[i][j];
                     var decompressedLength = shader.decompressedLengths[i][j];
                     var decompressedBytes = new byte[decompressedLength];
-                    LZ4Codec.Decode(shader.compressedBlob, (int)offset, (int)compressedLength, decompressedBytes, 0, (int)decompressedLength);
-                    using (var blobReader = new BinaryReader(new MemoryStream(decompressedBytes)))
+                    Buffer.BlockCopy(shader.compressedBlob, (int)offset, decompressedBytes, 0, (int)decompressedLength);
+                    using (var blobReader = new EndianBinaryReader(new MemoryStream(decompressedBytes), EndianType.LittleEndian))
                     {
                         if (j == 0)
                         {
@@ -56,138 +63,131 @@ namespace AssetStudio
                 }
             }
 
-            return ConvertSerializedShader(shader.m_ParsedForm, shader.platforms, shaderPrograms);
+            ConvertSerializedShader(shader.m_ParsedForm, shader.platforms, shaderPrograms, writer);
         }
 
-        private static string ConvertSerializedShader(SerializedShader m_ParsedForm, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static void ConvertSerializedShader(SerializedShader m_ParsedForm, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, TextWriter writer)
         {
-            var sb = new StringBuilder();
-            sb.Append($"Shader \"{m_ParsedForm.m_Name}\" {{\n");
+            writer.Write($"Shader \"{m_ParsedForm.m_Name}\" {{\n");
 
-            sb.Append(ConvertSerializedProperties(m_ParsedForm.m_PropInfo));
+            ConvertSerializedProperties(m_ParsedForm.m_PropInfo, writer);
 
             foreach (var m_SubShader in m_ParsedForm.m_SubShaders)
             {
-                sb.Append(ConvertSerializedSubShader(m_SubShader, platforms, shaderPrograms));
+                ConvertSerializedSubShader(m_SubShader, platforms, shaderPrograms, writer);
             }
 
             if (!string.IsNullOrEmpty(m_ParsedForm.m_FallbackName))
             {
-                sb.Append($"Fallback \"{m_ParsedForm.m_FallbackName}\"\n");
+                writer.Write($"Fallback \"{m_ParsedForm.m_FallbackName}\"\n");
             }
 
             if (!string.IsNullOrEmpty(m_ParsedForm.m_CustomEditorName))
             {
-                sb.Append($"CustomEditor \"{m_ParsedForm.m_CustomEditorName}\"\n");
+                writer.Write($"CustomEditor \"{m_ParsedForm.m_CustomEditorName}\"\n");
             }
 
-            sb.Append("}");
-            return sb.ToString();
+            writer.Write("}");
         }
 
-        private static string ConvertSerializedSubShader(SerializedSubShader m_SubShader, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static void ConvertSerializedSubShader(SerializedSubShader m_SubShader, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, TextWriter writer)
         {
-            var sb = new StringBuilder();
-            sb.Append("SubShader {\n");
+            writer.Write("SubShader {\n");
             if (m_SubShader.m_LOD != 0)
             {
-                sb.Append($" LOD {m_SubShader.m_LOD}\n");
+                writer.Write($" LOD {m_SubShader.m_LOD}\n");
             }
 
-            sb.Append(ConvertSerializedTagMap(m_SubShader.m_Tags, 1));
+            ConvertSerializedTagMap(m_SubShader.m_Tags, 1, writer);
 
             foreach (var m_Passe in m_SubShader.m_Passes)
             {
-                sb.Append(ConvertSerializedPass(m_Passe, platforms, shaderPrograms));
+                ConvertSerializedPass(m_Passe, platforms, shaderPrograms, writer);
             }
-            sb.Append("}\n");
-            return sb.ToString();
+            writer.Write("}\n");
         }
 
-        private static string ConvertSerializedPass(SerializedPass m_Passe, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static void ConvertSerializedPass(SerializedPass m_Passe, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, TextWriter writer)
         {
-            var sb = new StringBuilder();
             switch (m_Passe.m_Type)
             {
-                case PassType.Normal:
-                    sb.Append(" Pass ");
+                case PassType.kPassTypeNormal:
+                    writer.Write(" Pass ");
                     break;
-                case PassType.Use:
-                    sb.Append(" UsePass ");
+                case PassType.kPassTypeUse:
+                    writer.Write(" UsePass ");
                     break;
-                case PassType.Grab:
-                    sb.Append(" GrabPass ");
+                case PassType.kPassTypeGrab:
+                    writer.Write(" GrabPass ");
                     break;
             }
-            if (m_Passe.m_Type == PassType.Use)
+            if (m_Passe.m_Type == PassType.kPassTypeUse)
             {
-                sb.Append($"\"{m_Passe.m_UseName}\"\n");
+                writer.Write($"\"{m_Passe.m_UseName}\"\n");
             }
             else
             {
-                sb.Append("{\n");
+                writer.Write("{\n");
 
-                if (m_Passe.m_Type == PassType.Grab)
+                if (m_Passe.m_Type == PassType.kPassTypeGrab)
                 {
                     if (!string.IsNullOrEmpty(m_Passe.m_TextureName))
                     {
-                        sb.Append($"  \"{m_Passe.m_TextureName}\"\n");
+                        writer.Write($"  \"{m_Passe.m_TextureName}\"\n");
                     }
                 }
                 else
                 {
-                    sb.Append(ConvertSerializedShaderState(m_Passe.m_State));
+                    ConvertSerializedShaderState(m_Passe.m_State, writer);
 
                     if (m_Passe.progVertex.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"vp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"vp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progVertex.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
 
                     if (m_Passe.progFragment.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"fp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"fp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progFragment.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
 
                     if (m_Passe.progGeometry.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"gp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"gp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progGeometry.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
 
                     if (m_Passe.progHull.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"hp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"hp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progHull.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
 
                     if (m_Passe.progDomain.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"dp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"dp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progDomain.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
 
                     if (m_Passe.progRayTracing?.m_SubPrograms.Length > 0)
                     {
-                        sb.Append("Program \"rtp\" {\n");
-                        sb.Append(ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms));
-                        sb.Append("}\n");
+                        writer.Write("Program \"rtp\" {\n");
+                        ConvertSerializedSubPrograms(m_Passe.progRayTracing.m_SubPrograms, platforms, shaderPrograms, writer);
+                        writer.Write("}\n");
                     }
                 }
-                sb.Append("}\n");
+                writer.Write("}\n");
             }
-            return sb.ToString();
         }
 
-        private static string ConvertSerializedSubPrograms(SerializedSubProgram[] m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms)
+        private static void ConvertSerializedSubPrograms(SerializedSubProgram[] m_SubPrograms, ShaderCompilerPlatform[] platforms, ShaderProgram[] shaderPrograms, TextWriter writer)
         {
-            var sb = new StringBuilder();
             var groups = m_SubPrograms.GroupBy(x => x.m_BlobIndex);
             foreach (var group in groups)
             {
@@ -203,106 +203,104 @@ namespace AssetStudio
                             var isTier = subPrograms.Count > 1;
                             foreach (var subProgram in subPrograms)
                             {
-                                sb.Append($"SubProgram \"{GetPlatformString(platform)} ");
+                                writer.Write($"SubProgram \"{GetPlatformString(platform)} ");
                                 if (isTier)
                                 {
-                                    sb.Append($"hw_tier{subProgram.m_ShaderHardwareTier:00} ");
+                                    writer.Write($"hw_tier{subProgram.m_ShaderHardwareTier:00} ");
                                 }
-                                sb.Append("\" {\n");
-                                sb.Append(shaderPrograms[i].m_SubPrograms[subProgram.m_BlobIndex].Export());
-                                sb.Append("\n}\n");
+                                writer.Write("\" {\n");
+                                writer.Write(shaderPrograms[i].m_SubPrograms[subProgram.m_BlobIndex].Export());
+                                writer.Write("\n}\n");
                             }
                             break;
                         }
                     }
                 }
             }
-            return sb.ToString();
         }
 
-        private static string ConvertSerializedShaderState(SerializedShaderState m_State)
+        private static void ConvertSerializedShaderState(SerializedShaderState m_State, TextWriter writer)
         {
-            var sb = new StringBuilder();
             if (!string.IsNullOrEmpty(m_State.m_Name))
             {
-                sb.Append($"  Name \"{m_State.m_Name}\"\n");
+                writer.Write($"  Name \"{m_State.m_Name}\"\n");
             }
             if (m_State.m_LOD != 0)
             {
-                sb.Append($"  LOD {m_State.m_LOD}\n");
+                writer.Write($"  LOD {m_State.m_LOD}\n");
             }
 
-            sb.Append(ConvertSerializedTagMap(m_State.m_Tags, 2));
+            ConvertSerializedTagMap(m_State.m_Tags, 2, writer);
 
-            sb.Append(ConvertSerializedShaderRTBlendState(m_State.rtBlend, m_State.rtSeparateBlend));
+            ConvertSerializedShaderRTBlendState(m_State.rtBlend, m_State.rtSeparateBlend, writer);
 
             if (m_State.alphaToMask.val > 0f)
             {
-                sb.Append("  AlphaToMask On\n");
+                writer.Write("  AlphaToMask On\n");
             }
 
             if (m_State.zClip?.val != 1f) //ZClip On
             {
-                sb.Append("  ZClip Off\n");
+                writer.Write("  ZClip Off\n");
             }
 
             if (m_State.zTest.val != 4f) //ZTest LEqual
             {
-                sb.Append("  ZTest ");
+                writer.Write("  ZTest ");
                 switch (m_State.zTest.val) //enum CompareFunction
                 {
                     case 0f: //kFuncDisabled
-                        sb.Append("Off");
+                        writer.Write("Off");
                         break;
                     case 1f: //kFuncNever
-                        sb.Append("Never");
+                        writer.Write("Never");
                         break;
                     case 2f: //kFuncLess
-                        sb.Append("Less");
+                        writer.Write("Less");
                         break;
                     case 3f: //kFuncEqual
-                        sb.Append("Equal");
+                        writer.Write("Equal");
                         break;
                     case 5f: //kFuncGreater
-                        sb.Append("Greater");
+                        writer.Write("Greater");
                         break;
                     case 6f: //kFuncNotEqual
-                        sb.Append("NotEqual");
+                        writer.Write("NotEqual");
                         break;
                     case 7f: //kFuncGEqual
-                        sb.Append("GEqual");
+                        writer.Write("GEqual");
                         break;
                     case 8f: //kFuncAlways
-                        sb.Append("Always");
+                        writer.Write("Always");
                         break;
                 }
 
-                sb.Append("\n");
+                writer.Write("\n");
             }
 
             if (m_State.zWrite.val != 1f) //ZWrite On
             {
-                sb.Append("  ZWrite Off\n");
+                writer.Write("  ZWrite Off\n");
             }
 
             if (m_State.culling.val != 2f) //Cull Back
             {
-                sb.Append("  Cull ");
+                writer.Write("  Cull ");
                 switch (m_State.culling.val) //enum CullMode
                 {
                     case 0f: //kCullOff
-                        sb.Append("Off");
+                        writer.Write("Off");
                         break;
                     case 1f: //kCullFront
-                        sb.Append("Front");
+                        writer.Write("Front");
                         break;
                 }
-                sb.Append("\n");
+                writer.Write("\n");
             }
 
             if (m_State.offsetFactor.val != 0f || m_State.offsetUnits.val != 0f)
             {
-                sb.Append($"  Offset {m_State.offsetFactor.val}, {m_State.offsetUnits.val}\n");
+                writer.Write($"  Offset {m_State.offsetFactor.val}, {m_State.offsetUnits.val}\n");
             }
 
             if (m_State.stencilRef.val != 0f ||
@@ -321,44 +319,44 @@ namespace AssetStudio
                 m_State.stencilOpBack.zFail.val != 0f ||
                 m_State.stencilOpBack.comp.val != 8f)
             {
-                sb.Append("  Stencil {\n");
+                writer.Write("  Stencil {\n");
                 if (m_State.stencilRef.val != 0f)
                 {
-                    sb.Append($"   Ref {m_State.stencilRef.val}\n");
+                    writer.Write($"   Ref {m_State.stencilRef.val}\n");
                 }
                 if (m_State.stencilReadMask.val != 255f)
                 {
-                    sb.Append($"   ReadMask {m_State.stencilReadMask.val}\n");
+                    writer.Write($"   ReadMask {m_State.stencilReadMask.val}\n");
                 }
                 if (m_State.stencilWriteMask.val != 255f)
                 {
-                    sb.Append($"   WriteMask {m_State.stencilWriteMask.val}\n");
+                    writer.Write($"   WriteMask {m_State.stencilWriteMask.val}\n");
                 }
                 if (m_State.stencilOp.pass.val != 0f ||
                     m_State.stencilOp.fail.val != 0f ||
                     m_State.stencilOp.zFail.val != 0f ||
                     m_State.stencilOp.comp.val != 8f)
                 {
-                    sb.Append(ConvertSerializedStencilOp(m_State.stencilOp, ""));
+                    writer.Write(ConvertSerializedStencilOp(m_State.stencilOp, ""));
                 }
                 if (m_State.stencilOpFront.pass.val != 0f ||
                     m_State.stencilOpFront.fail.val != 0f ||
                     m_State.stencilOpFront.zFail.val != 0f ||
                     m_State.stencilOpFront.comp.val != 8f)
                 {
-                    sb.Append(ConvertSerializedStencilOp(m_State.stencilOpFront, "Front"));
+                    writer.Write(ConvertSerializedStencilOp(m_State.stencilOpFront, "Front"));
                 }
                 if (m_State.stencilOpBack.pass.val != 0f ||
                     m_State.stencilOpBack.fail.val != 0f ||
                     m_State.stencilOpBack.zFail.val != 0f ||
                     m_State.stencilOpBack.comp.val != 8f)
                 {
-                    sb.Append(ConvertSerializedStencilOp(m_State.stencilOpBack, "Back"));
+                    writer.Write(ConvertSerializedStencilOp(m_State.stencilOpBack, "Back"));
                 }
-                sb.Append("  }\n");
+                writer.Write("  }\n");
             }
 
-            if (m_State.fogMode != FogMode.Unknown ||
+            if (m_State.fogMode != FogMode.kFogUnknown ||
                 m_State.fogColor.x.val != 0f ||
                 m_State.fogColor.y.val != 0f ||
                 m_State.fogColor.z.val != 0f ||
@@ -367,58 +365,56 @@ namespace AssetStudio
                 m_State.fogStart.val != 0f ||
                 m_State.fogEnd.val != 0f)
             {
-                sb.Append("  Fog {\n");
-                if (m_State.fogMode != FogMode.Unknown)
+                writer.Write("  Fog {\n");
+                if (m_State.fogMode != FogMode.kFogUnknown)
                 {
-                    sb.Append("   Mode ");
+                    writer.Write("   Mode ");
                     switch (m_State.fogMode)
                     {
-                        case FogMode.Disabled:
-                            sb.Append("Off");
+                        case FogMode.kFogDisabled:
+                            writer.Write("Off");
                             break;
-                        case FogMode.Linear:
-                            sb.Append("Linear");
+                        case FogMode.kFogLinear:
+                            writer.Write("Linear");
                             break;
-                        case FogMode.Exp:
-                            sb.Append("Exp");
+                        case FogMode.kFogExp:
+                            writer.Write("Exp");
                             break;
-                        case FogMode.Exp2:
-                            sb.Append("Exp2");
+                        case FogMode.kFogExp2:
+                            writer.Write("Exp2");
                             break;
                     }
-                    sb.Append("\n");
+                    writer.Write("\n");
                 }
                 if (m_State.fogColor.x.val != 0f ||
                     m_State.fogColor.y.val != 0f ||
                     m_State.fogColor.z.val != 0f ||
                     m_State.fogColor.w.val != 0f)
                 {
-                    sb.AppendFormat("   Color ({0},{1},{2},{3})\n",
+                    writer.Write(string.Format("   Color ({0},{1},{2},{3})\n",
                         m_State.fogColor.x.val.ToString(CultureInfo.InvariantCulture),
                         m_State.fogColor.y.val.ToString(CultureInfo.InvariantCulture),
                         m_State.fogColor.z.val.ToString(CultureInfo.InvariantCulture),
-                        m_State.fogColor.w.val.ToString(CultureInfo.InvariantCulture));
+                        m_State.fogColor.w.val.ToString(CultureInfo.InvariantCulture)));
                 }
                 if (m_State.fogDensity.val != 0f)
                 {
-                    sb.Append($"   Density {m_State.fogDensity.val.ToString(CultureInfo.InvariantCulture)}\n");
+                    writer.Write($"   Density {m_State.fogDensity.val.ToString(CultureInfo.InvariantCulture)}\n");
                 }
                 if (m_State.fogStart.val != 0f ||
                     m_State.fogEnd.val != 0f)
                 {
-                    sb.Append($"   Range {m_State.fogStart.val.ToString(CultureInfo.InvariantCulture)}, {m_State.fogEnd.val.ToString(CultureInfo.InvariantCulture)}\n");
+                    writer.Write($"   Range {m_State.fogStart.val.ToString(CultureInfo.InvariantCulture)}, {m_State.fogEnd.val.ToString(CultureInfo.InvariantCulture)}\n");
                 }
-                sb.Append("  }\n");
+                writer.Write("  }\n");
             }
 
             if (m_State.lighting)
             {
-                sb.Append($"  Lighting {(m_State.lighting ? "On" : "Off")}\n");
+                writer.Write($"  Lighting {(m_State.lighting ? "On" : "Off")}\n");
             }
 
-            sb.Append($"  GpuProgramID {m_State.gpuProgramID}\n");
-
-            return sb.ToString();
+            writer.Write($"  GpuProgramID {m_State.gpuProgramID}\n");
         }
 
         private static string ConvertSerializedStencilOp(SerializedStencilOp stencilOp, string suffix)
@@ -481,9 +477,8 @@ namespace AssetStudio
             }
         }
 
-        private static string ConvertSerializedShaderRTBlendState(SerializedShaderRTBlendState[] rtBlend, bool rtSeparateBlend)
+        private static void ConvertSerializedShaderRTBlendState(SerializedShaderRTBlendState[] rtBlend, bool rtSeparateBlend, TextWriter writer)
         {
-            var sb = new StringBuilder();
             for (var i = 0; i < rtBlend.Length; i++)
             {
                 var blend = rtBlend[i];
@@ -492,67 +487,66 @@ namespace AssetStudio
                     blend.srcBlendAlpha.val != 1f ||
                     blend.destBlendAlpha.val != 0f)
                 {
-                    sb.Append("  Blend ");
+                    writer.Write("  Blend ");
                     if (i != 0 || rtSeparateBlend)
                     {
-                        sb.Append($"{i} ");
+                        writer.Write($"{i} ");
                     }
-                    sb.Append($"{ConvertBlendFactor(blend.srcBlend)} {ConvertBlendFactor(blend.destBlend)}");
+                    writer.Write($"{ConvertBlendFactor(blend.srcBlend)} {ConvertBlendFactor(blend.destBlend)}");
                     if (blend.srcBlendAlpha.val != 1f ||
                         blend.destBlendAlpha.val != 0f)
                     {
-                        sb.Append($", {ConvertBlendFactor(blend.srcBlendAlpha)} {ConvertBlendFactor(blend.destBlendAlpha)}");
+                        writer.Write($", {ConvertBlendFactor(blend.srcBlendAlpha)} {ConvertBlendFactor(blend.destBlendAlpha)}");
                     }
-                    sb.Append("\n");
+                    writer.Write("\n");
                 }
 
                 if (blend.blendOp.val != 0f ||
                     blend.blendOpAlpha.val != 0f)
                 {
-                    sb.Append("  BlendOp ");
+                    writer.Write("  BlendOp ");
                     if (i != 0 || rtSeparateBlend)
                     {
-                        sb.Append($"{i} ");
+                        writer.Write($"{i} ");
                     }
-                    sb.Append(ConvertBlendOp(blend.blendOp));
+                    writer.Write(ConvertBlendOp(blend.blendOp));
                     if (blend.blendOpAlpha.val != 0f)
                     {
-                        sb.Append($", {ConvertBlendOp(blend.blendOpAlpha)}");
+                        writer.Write($", {ConvertBlendOp(blend.blendOpAlpha)}");
                     }
-                    sb.Append("\n");
+                    writer.Write("\n");
                 }
 
                 var val = (int)blend.colMask.val;
                 if (val != 0xf)
                 {
-                    sb.Append("  ColorMask ");
+                    writer.Write("  ColorMask ");
                     if (val == 0)
                     {
-                        sb.Append(0);
+                        writer.Write(0);
                     }
                     else
                     {
                         if ((val & 0x2) != 0)
                         {
-                            sb.Append("R");
+                            writer.Write("R");
                         }
                         if ((val & 0x4) != 0)
                         {
-                            sb.Append("G");
+                            writer.Write("G");
                         }
                         if ((val & 0x8) != 0)
                         {
-                            sb.Append("B");
+                            writer.Write("B");
                         }
                         if ((val & 0x1) != 0)
                         {
-                            sb.Append("A");
+                            writer.Write("A");
                         }
                     }
-                    sb.Append($" {i}\n");
+                    writer.Write($" {i}\n");
                 }
             }
-            return sb.ToString();
         }
 
         private static string ConvertBlendOp(SerializedShaderFloatValue op)
@@ -635,165 +629,158 @@ namespace AssetStudio
             }
         }
 
-        private static string ConvertSerializedTagMap(SerializedTagMap m_Tags, int intent)
+        private static void ConvertSerializedTagMap(SerializedTagMap m_Tags, int intent, TextWriter writer)
         {
-            var sb = new StringBuilder();
             if (m_Tags.tags.Length > 0)
             {
-                sb.Append(new string(' ', intent));
-                sb.Append("Tags { ");
+                writer.Write(new string(' ', intent));
+                writer.Write("Tags { ");
                 foreach (var pair in m_Tags.tags)
                 {
-                    sb.Append($"\"{pair.Key}\" = \"{pair.Value}\" ");
+                    writer.Write($"\"{pair.Key}\" = \"{pair.Value}\" ");
                 }
-                sb.Append("}\n");
+                writer.Write("}\n");
             }
-            return sb.ToString();
         }
 
-        private static string ConvertSerializedProperties(SerializedProperties m_PropInfo)
+        private static void ConvertSerializedProperties(SerializedProperties m_PropInfo, TextWriter writer)
         {
-            var sb = new StringBuilder();
-            sb.Append("Properties {\n");
+            writer.Write("Properties {\n");
             foreach (var m_Prop in m_PropInfo.m_Props)
             {
-                sb.Append(ConvertSerializedProperty(m_Prop));
+                ConvertSerializedProperty(m_Prop, writer);
             }
-            sb.Append("}\n");
-            return sb.ToString();
+            writer.Write("}\n");
         }
 
-        private static string ConvertSerializedProperty(SerializedProperty m_Prop)
+        private static void ConvertSerializedProperty(SerializedProperty m_Prop, TextWriter writer)
         {
-            var sb = new StringBuilder();
             foreach (var m_Attribute in m_Prop.m_Attributes)
             {
-                sb.Append($"[{m_Attribute}] ");
+                writer.Write($"[{m_Attribute}] ");
             }
             //TODO Flag
-            sb.Append($"{m_Prop.m_Name} (\"{m_Prop.m_Description}\", ");
+            writer.Write($"{m_Prop.m_Name} (\"{m_Prop.m_Description}\", ");
             switch (m_Prop.m_Type)
             {
-                case SerializedPropertyType.Color:
-                    sb.Append("Color");
+                case SerializedPropertyType.kColor:
+                    writer.Write("Color");
                     break;
-                case SerializedPropertyType.Vector:
-                    sb.Append("Vector");
+                case SerializedPropertyType.kVector:
+                    writer.Write("Vector");
                     break;
-                case SerializedPropertyType.Float:
-                    sb.Append("Float");
+                case SerializedPropertyType.kFloat:
+                    writer.Write("Float");
                     break;
-                case SerializedPropertyType.Range:
-                    sb.Append($"Range({m_Prop.m_DefValue[1]}, {m_Prop.m_DefValue[2]})");
+                case SerializedPropertyType.kRange:
+                    writer.Write($"Range({m_Prop.m_DefValue[1]}, {m_Prop.m_DefValue[2]})");
                     break;
-                case SerializedPropertyType.Texture:
+                case SerializedPropertyType.kTexture:
                     switch (m_Prop.m_DefTexture.m_TexDim)
                     {
-                        case TextureDimension.Any:
-                            sb.Append("any");
+                        case TextureDimension.kTexDimAny:
+                            writer.Write("any");
                             break;
-                        case TextureDimension.Tex2D:
-                            sb.Append("2D");
+                        case TextureDimension.kTexDim2D:
+                            writer.Write("2D");
                             break;
-                        case TextureDimension.Tex3D:
-                            sb.Append("3D");
+                        case TextureDimension.kTexDim3D:
+                            writer.Write("3D");
                             break;
-                        case TextureDimension.Cube:
-                            sb.Append("Cube");
+                        case TextureDimension.kTexDimCUBE:
+                            writer.Write("Cube");
                             break;
-                        case TextureDimension.Tex2DArray:
-                            sb.Append("2DArray");
+                        case TextureDimension.kTexDim2DArray:
+                            writer.Write("2DArray");
                             break;
-                        case TextureDimension.CubeArray:
-                            sb.Append("CubeArray");
+                        case TextureDimension.kTexDimCubeArray:
+                            writer.Write("CubeArray");
                             break;
                     }
                     break;
             }
-            sb.Append(") = ");
+            writer.Write(") = ");
             switch (m_Prop.m_Type)
             {
-                case SerializedPropertyType.Color:
-                case SerializedPropertyType.Vector:
-                    sb.Append($"({m_Prop.m_DefValue[0]},{m_Prop.m_DefValue[1]},{m_Prop.m_DefValue[2]},{m_Prop.m_DefValue[3]})");
+                case SerializedPropertyType.kColor:
+                case SerializedPropertyType.kVector:
+                    writer.Write($"({m_Prop.m_DefValue[0]},{m_Prop.m_DefValue[1]},{m_Prop.m_DefValue[2]},{m_Prop.m_DefValue[3]})");
                     break;
-                case SerializedPropertyType.Float:
-                case SerializedPropertyType.Range:
-                    sb.Append(m_Prop.m_DefValue[0]);
+                case SerializedPropertyType.kFloat:
+                case SerializedPropertyType.kRange:
+                    writer.Write(m_Prop.m_DefValue[0]);
                     break;
-                case SerializedPropertyType.Texture:
-                    sb.Append($"\"{m_Prop.m_DefTexture.m_DefaultName}\" {{ }}");
+                case SerializedPropertyType.kTexture:
+                    writer.Write($"\"{m_Prop.m_DefTexture.m_DefaultName}\" {{ }}");
                     break;
                 default:
                     throw new ArgumentOutOfRangeException();
             }
-            sb.Append("\n");
-            return sb.ToString();
+            writer.Write("\n");
         }
 
         private static bool CheckGpuProgramUsable(ShaderCompilerPlatform platform, ShaderGpuProgramType programType)
         {
             switch (platform)
             {
-                case ShaderCompilerPlatform.GL:
-                    return programType == ShaderGpuProgramType.GLLegacy;
-                case ShaderCompilerPlatform.D3D9:
-                    return programType == ShaderGpuProgramType.DX9VertexSM20
-                        || programType == ShaderGpuProgramType.DX9VertexSM30
-                        || programType == ShaderGpuProgramType.DX9PixelSM20
-                        || programType == ShaderGpuProgramType.DX9PixelSM30;
-                case ShaderCompilerPlatform.Xbox360:
-                case ShaderCompilerPlatform.PS3:
-                case ShaderCompilerPlatform.PSP2:
-                case ShaderCompilerPlatform.PS4:
-                case ShaderCompilerPlatform.XboxOne:
-                case ShaderCompilerPlatform.N3DS:
-                case ShaderCompilerPlatform.WiiU:
-                case ShaderCompilerPlatform.Switch:
-                case ShaderCompilerPlatform.XboxOneD3D12:
-                case ShaderCompilerPlatform.GameCoreXboxOne:
-                case ShaderCompilerPlatform.GameCoreScarlett:
-                case ShaderCompilerPlatform.PS5:
-                    return programType == ShaderGpuProgramType.ConsoleVS
-                        || programType == ShaderGpuProgramType.ConsoleFS
-                        || programType == ShaderGpuProgramType.ConsoleHS
-                        || programType == ShaderGpuProgramType.ConsoleDS
-                        || programType == ShaderGpuProgramType.ConsoleGS;
-                case ShaderCompilerPlatform.PS5NGGC:
-                    return programType == ShaderGpuProgramType.PS5NGGC;
-                case ShaderCompilerPlatform.D3D11:
-                    return programType == ShaderGpuProgramType.DX11VertexSM40
-                        || programType == ShaderGpuProgramType.DX11VertexSM50
-                        || programType == ShaderGpuProgramType.DX11PixelSM40
-                        || programType == ShaderGpuProgramType.DX11PixelSM50
-                        || programType == ShaderGpuProgramType.DX11GeometrySM40
-                        || programType == ShaderGpuProgramType.DX11GeometrySM50
-                        || programType == ShaderGpuProgramType.DX11HullSM50
-                        || programType == ShaderGpuProgramType.DX11DomainSM50;
-                case ShaderCompilerPlatform.GLES20:
-                    return programType == ShaderGpuProgramType.GLES;
-                case ShaderCompilerPlatform.NaCl: //Obsolete
+                case ShaderCompilerPlatform.kShaderCompPlatformGL:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramGLLegacy;
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D9:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramDX9VertexSM20
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX9VertexSM30
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX9PixelSM20
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX9PixelSM30;
+                case ShaderCompilerPlatform.kShaderCompPlatformXbox360:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS3:
+                case ShaderCompilerPlatform.kShaderCompPlatformPSP2:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS4:
+                case ShaderCompilerPlatform.kShaderCompPlatformXboxOne:
+                case ShaderCompilerPlatform.kShaderCompPlatformN3DS:
+                case ShaderCompilerPlatform.kShaderCompPlatformWiiU:
+                case ShaderCompilerPlatform.kShaderCompPlatformSwitch:
+                case ShaderCompilerPlatform.kShaderCompPlatformXboxOneD3D12:
+                case ShaderCompilerPlatform.kShaderCompPlatformGameCoreXboxOne:
+                case ShaderCompilerPlatform.kShaderCompPlatformGameCoreScarlett:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS5:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS5NGGC:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramConsoleVS
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramConsoleFS
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramConsoleHS
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramConsoleDS
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramConsoleGS;
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D11:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramDX11VertexSM40
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11VertexSM50
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11PixelSM40
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11PixelSM50
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11GeometrySM40
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11GeometrySM50
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11HullSM50
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX11DomainSM50;
+                case ShaderCompilerPlatform.kShaderCompPlatformGLES20:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramGLES;
+                case ShaderCompilerPlatform.kShaderCompPlatformNaCl: //Obsolete
                     throw new NotSupportedException();
-                case ShaderCompilerPlatform.Flash: //Obsolete
+                case ShaderCompilerPlatform.kShaderCompPlatformFlash: //Obsolete
                     throw new NotSupportedException();
-                case ShaderCompilerPlatform.D3D11_9x:
-                    return programType == ShaderGpuProgramType.DX10Level9Vertex
-                        || programType == ShaderGpuProgramType.DX10Level9Pixel;
-                case ShaderCompilerPlatform.GLES3Plus:
-                    return programType == ShaderGpuProgramType.GLES31AEP
-                        || programType == ShaderGpuProgramType.GLES31
-                        || programType == ShaderGpuProgramType.GLES3;
-                case ShaderCompilerPlatform.PSM: //Unknown
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D11_9x:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramDX10Level9Vertex
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramDX10Level9Pixel;
+                case ShaderCompilerPlatform.kShaderCompPlatformGLES3Plus:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramGLES31AEP
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramGLES31
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramGLES3;
+                case ShaderCompilerPlatform.kShaderCompPlatformPSM: //Unknown
                     throw new NotSupportedException();
-                case ShaderCompilerPlatform.Metal:
-                    return programType == ShaderGpuProgramType.MetalVS
-                        || programType == ShaderGpuProgramType.MetalFS;
-                case ShaderCompilerPlatform.OpenGLCore:
-                    return programType == ShaderGpuProgramType.GLCore32
-                        || programType == ShaderGpuProgramType.GLCore41
-                        || programType == ShaderGpuProgramType.GLCore43;
-                case ShaderCompilerPlatform.Vulkan:
-                    return programType == ShaderGpuProgramType.SPIRV;
+                case ShaderCompilerPlatform.kShaderCompPlatformMetal:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramMetalVS
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramMetalFS;
+                case ShaderCompilerPlatform.kShaderCompPlatformOpenGLCore:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramGLCore32
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramGLCore41
+                        || programType == ShaderGpuProgramType.kShaderGpuProgramGLCore43;
+                case ShaderCompilerPlatform.kShaderCompPlatformVulkan:
+                    return programType == ShaderGpuProgramType.kShaderGpuProgramSPIRV;
                 default:
                     throw new NotSupportedException();
             }
@@ -803,55 +790,55 @@ namespace AssetStudio
         {
             switch (platform)
             {
-                case ShaderCompilerPlatform.GL:
+                case ShaderCompilerPlatform.kShaderCompPlatformGL:
                     return "openGL";
-                case ShaderCompilerPlatform.D3D9:
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D9:
                     return "d3d9";
-                case ShaderCompilerPlatform.Xbox360:
+                case ShaderCompilerPlatform.kShaderCompPlatformXbox360:
                     return "xbox360";
-                case ShaderCompilerPlatform.PS3:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS3:
                     return "ps3";
-                case ShaderCompilerPlatform.D3D11:
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D11:
                     return "d3d11";
-                case ShaderCompilerPlatform.GLES20:
+                case ShaderCompilerPlatform.kShaderCompPlatformGLES20:
                     return "gles";
-                case ShaderCompilerPlatform.NaCl:
+                case ShaderCompilerPlatform.kShaderCompPlatformNaCl:
                     return "glesdesktop";
-                case ShaderCompilerPlatform.Flash:
+                case ShaderCompilerPlatform.kShaderCompPlatformFlash:
                     return "flash";
-                case ShaderCompilerPlatform.D3D11_9x:
+                case ShaderCompilerPlatform.kShaderCompPlatformD3D11_9x:
                     return "d3d11_9x";
-                case ShaderCompilerPlatform.GLES3Plus:
+                case ShaderCompilerPlatform.kShaderCompPlatformGLES3Plus:
                     return "gles3";
-                case ShaderCompilerPlatform.PSP2:
+                case ShaderCompilerPlatform.kShaderCompPlatformPSP2:
                     return "psp2";
-                case ShaderCompilerPlatform.PS4:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS4:
                     return "ps4";
-                case ShaderCompilerPlatform.XboxOne:
+                case ShaderCompilerPlatform.kShaderCompPlatformXboxOne:
                     return "xboxone";
-                case ShaderCompilerPlatform.PSM:
+                case ShaderCompilerPlatform.kShaderCompPlatformPSM:
                     return "psm";
-                case ShaderCompilerPlatform.Metal:
+                case ShaderCompilerPlatform.kShaderCompPlatformMetal:
                     return "metal";
-                case ShaderCompilerPlatform.OpenGLCore:
+                case ShaderCompilerPlatform.kShaderCompPlatformOpenGLCore:
                     return "glcore";
-                case ShaderCompilerPlatform.N3DS:
+                case ShaderCompilerPlatform.kShaderCompPlatformN3DS:
                     return "n3ds";
-                case ShaderCompilerPlatform.WiiU:
+                case ShaderCompilerPlatform.kShaderCompPlatformWiiU:
                     return "wiiu";
-                case ShaderCompilerPlatform.Vulkan:
+                case ShaderCompilerPlatform.kShaderCompPlatformVulkan:
                     return "vulkan";
-                case ShaderCompilerPlatform.Switch:
+                case ShaderCompilerPlatform.kShaderCompPlatformSwitch:
                     return "switch";
-                case ShaderCompilerPlatform.XboxOneD3D12:
+                case ShaderCompilerPlatform.kShaderCompPlatformXboxOneD3D12:
                     return "xboxone_d3d12";
-                case ShaderCompilerPlatform.GameCoreXboxOne:
+                case ShaderCompilerPlatform.kShaderCompPlatformGameCoreXboxOne:
                     return "xboxone";
-                case ShaderCompilerPlatform.GameCoreScarlett:
+                case ShaderCompilerPlatform.kShaderCompPlatformGameCoreScarlett:
                     return "xbox_scarlett";
-                case ShaderCompilerPlatform.PS5:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS5:
                     return "ps5";
-                case ShaderCompilerPlatform.PS5NGGC:
+                case ShaderCompilerPlatform.kShaderCompPlatformPS5NGGC:
                     return "ps5_nggc";
                 default:
                     return "unknown";
@@ -887,7 +874,7 @@ namespace AssetStudio
         public ShaderSubProgramEntry[] entries;
         public ShaderSubProgram[] m_SubPrograms;
 
-        public ShaderProgram(BinaryReader reader, int[] version)
+        public ShaderProgram(EndianBinaryReader reader, int[] version)
         {
             var subProgramsCapacity = reader.ReadInt32();
             entries = new ShaderSubProgramEntry[subProgramsCapacity];
@@ -896,19 +883,6 @@ namespace AssetStudio
                 entries[i] = new ShaderSubProgramEntry(reader, version);
             }
             m_SubPrograms = new ShaderSubProgram[subProgramsCapacity];
-        }
-
-        public void Read(BinaryReader reader, int segment)
-        {
-            for (int i = 0; i < entries.Length; i++)
-            {
-                var entry = entries[i];
-                if (entry.Segment == segment)
-                {
-                    reader.BaseStream.Position = entry.Offset;
-                    m_SubPrograms[i] = new ShaderSubProgram(reader);
-                }
-            }
         }
 
         public string Export(string shader)
@@ -921,6 +895,18 @@ namespace AssetStudio
             shader = Regex.Replace(shader, "GpuProgramIndex (.+)", evaluator);
             return shader;
         }
+        public void Read(EndianBinaryReader reader, int segment)
+        {
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var entry = entries[i];
+                if (entry.Segment == segment)
+                {
+                    reader.BaseStream.Position = entry.Offset;
+                    m_SubPrograms[i] = new ShaderSubProgram(reader);
+                }
+            }
+        }
     }
 
     public class ShaderSubProgram
@@ -931,7 +917,7 @@ namespace AssetStudio
         public string[] m_LocalKeywords;
         public byte[] m_ProgramCode;
 
-        public ShaderSubProgram(BinaryReader reader)
+        public ShaderSubProgram(EndianBinaryReader reader)
         {
             //LoadGpuProgramFromData
             //201509030 - Unity 5.3
@@ -997,36 +983,36 @@ namespace AssetStudio
             {
                 switch (m_ProgramType)
                 {
-                    case ShaderGpuProgramType.GLLegacy:
-                    case ShaderGpuProgramType.GLES31AEP:
-                    case ShaderGpuProgramType.GLES31:
-                    case ShaderGpuProgramType.GLES3:
-                    case ShaderGpuProgramType.GLES:
-                    case ShaderGpuProgramType.GLCore32:
-                    case ShaderGpuProgramType.GLCore41:
-                    case ShaderGpuProgramType.GLCore43:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLLegacy:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLES31AEP:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLES31:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLES3:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLES:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLCore32:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLCore41:
+                    case ShaderGpuProgramType.kShaderGpuProgramGLCore43:
                         sb.Append(Encoding.UTF8.GetString(m_ProgramCode));
                         break;
-                    case ShaderGpuProgramType.DX9VertexSM20:
-                    case ShaderGpuProgramType.DX9VertexSM30:
-                    case ShaderGpuProgramType.DX9PixelSM20:
-                    case ShaderGpuProgramType.DX9PixelSM30:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX9VertexSM20:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX9VertexSM30:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX9PixelSM20:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX9PixelSM30:
                         {
                             /*var shaderBytecode = new ShaderBytecode(m_ProgramCode);
                             sb.Append(shaderBytecode.Disassemble());*/
                             sb.Append("// shader disassembly not supported on DXBC");
                             break;
                         }
-                    case ShaderGpuProgramType.DX10Level9Vertex:
-                    case ShaderGpuProgramType.DX10Level9Pixel:
-                    case ShaderGpuProgramType.DX11VertexSM40:
-                    case ShaderGpuProgramType.DX11VertexSM50:
-                    case ShaderGpuProgramType.DX11PixelSM40:
-                    case ShaderGpuProgramType.DX11PixelSM50:
-                    case ShaderGpuProgramType.DX11GeometrySM40:
-                    case ShaderGpuProgramType.DX11GeometrySM50:
-                    case ShaderGpuProgramType.DX11HullSM50:
-                    case ShaderGpuProgramType.DX11DomainSM50:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX10Level9Vertex:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX10Level9Pixel:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11VertexSM40:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11VertexSM50:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11PixelSM40:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11PixelSM50:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11GeometrySM40:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11GeometrySM50:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11HullSM50:
+                    case ShaderGpuProgramType.kShaderGpuProgramDX11DomainSM50:
                         {
                             /*int start = 6;
                             if (m_Version == 201509030) // 5.3
@@ -1040,8 +1026,8 @@ namespace AssetStudio
                             sb.Append("// shader disassembly not supported on DXBC");
                             break;
                         }
-                    case ShaderGpuProgramType.MetalVS:
-                    case ShaderGpuProgramType.MetalFS:
+                    case ShaderGpuProgramType.kShaderGpuProgramMetalVS:
+                    case ShaderGpuProgramType.kShaderGpuProgramMetalFS:
                         using (var reader = new BinaryReader(new MemoryStream(m_ProgramCode)))
                         {
                             var fourCC = reader.ReadUInt32();
@@ -1055,7 +1041,7 @@ namespace AssetStudio
                             sb.Append(Encoding.UTF8.GetString(buff));
                         }
                         break;
-                    case ShaderGpuProgramType.SPIRV:
+                    case ShaderGpuProgramType.kShaderGpuProgramSPIRV:
                         try
                         {
                             sb.Append(SpirVShaderConverter.Convert(m_ProgramCode));
@@ -1065,11 +1051,11 @@ namespace AssetStudio
                             sb.Append($"// disassembly error {e.Message}\n");
                         }
                         break;
-                    case ShaderGpuProgramType.ConsoleVS:
-                    case ShaderGpuProgramType.ConsoleFS:
-                    case ShaderGpuProgramType.ConsoleHS:
-                    case ShaderGpuProgramType.ConsoleDS:
-                    case ShaderGpuProgramType.ConsoleGS:
+                    case ShaderGpuProgramType.kShaderGpuProgramConsoleVS:
+                    case ShaderGpuProgramType.kShaderGpuProgramConsoleFS:
+                    case ShaderGpuProgramType.kShaderGpuProgramConsoleHS:
+                    case ShaderGpuProgramType.kShaderGpuProgramConsoleDS:
+                    case ShaderGpuProgramType.kShaderGpuProgramConsoleGS:
                         sb.Append(Encoding.UTF8.GetString(m_ProgramCode));
                         break;
                     default:
