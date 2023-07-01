@@ -94,29 +94,29 @@ namespace AssetStudio
             {
                 switch (m_AudioClip.m_Type)
                 {
-                    case FMODSoundType.ACC:
+                    case AudioType.ACC:
                         return ".m4a";
-                    case FMODSoundType.AIFF:
+                    case AudioType.AIFF:
                         return ".aif";
-                    case FMODSoundType.IT:
+                    case AudioType.IT:
                         return ".it";
-                    case FMODSoundType.MOD:
+                    case AudioType.MOD:
                         return ".mod";
-                    case FMODSoundType.MPEG:
+                    case AudioType.MPEG:
                         return ".mp3";
-                    case FMODSoundType.OGGVORBIS:
+                    case AudioType.OGGVORBIS:
                         return ".ogg";
-                    case FMODSoundType.S3M:
+                    case AudioType.S3M:
                         return ".s3m";
-                    case FMODSoundType.WAV:
+                    case AudioType.WAV:
                         return ".wav";
-                    case FMODSoundType.XM:
+                    case AudioType.XM:
                         return ".xm";
-                    case FMODSoundType.XMA:
+                    case AudioType.XMA:
                         return ".wav";
-                    case FMODSoundType.VAG:
+                    case AudioType.VAG:
                         return ".vag";
-                    case FMODSoundType.AUDIOQUEUE:
+                    case AudioType.AUDIOQUEUE:
                         return ".fsb";
                 }
 
@@ -133,7 +133,7 @@ namespace AssetStudio
                         return ".fsb";
                     case AudioCompressionFormat.MP3:
                         return ".fsb";
-                    case AudioCompressionFormat.PSMVAG:
+                    case AudioCompressionFormat.VAG:
                         return ".fsb";
                     case AudioCompressionFormat.HEVAG:
                         return ".fsb";
@@ -159,13 +159,13 @@ namespace AssetStudio
                 {
                     switch (m_AudioClip.m_Type)
                     {
-                        case FMODSoundType.AIFF:
-                        case FMODSoundType.IT:
-                        case FMODSoundType.MOD:
-                        case FMODSoundType.S3M:
-                        case FMODSoundType.XM:
-                        case FMODSoundType.XMA:
-                        case FMODSoundType.AUDIOQUEUE:
+                        case AudioType.AIFF:
+                        case AudioType.IT:
+                        case AudioType.MOD:
+                        case AudioType.S3M:
+                        case AudioType.XM:
+                        case AudioType.XMA:
+                        case AudioType.AUDIOQUEUE:
                             return true;
                         default:
                             return false;

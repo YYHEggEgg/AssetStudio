@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using static AssetStudio.ImportHelper;
 
 namespace AssetStudio
@@ -18,12 +19,12 @@ namespace AssetStudio
 
         private List<string> importFiles = new List<string>();
         private HashSet<string> importFilesHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private HashSet<string> noexistFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private HashSet<string> assetsFileListHash = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         public void LoadFiles(params string[] files)
         {
             var path = Path.GetDirectoryName(Path.GetFullPath(files[0]));
+            AsbManager.ProcessDependancies(ref files);
             MergeSplitAssets(path);
             var toReadFile = ProcessingSplitFiles(files.ToList());
             Load(toReadFile);
@@ -32,8 +33,10 @@ namespace AssetStudio
         public void LoadFolder(string path)
         {
             MergeSplitAssets(path, true);
-            var files = Directory.GetFiles(path, "*.*", SearchOption.AllDirectories).ToList();
-            var toReadFile = ProcessingSplitFiles(files);
+            var files = Directory.GetFiles(path, "*.*", SearchOption.AllDirectories).ToArray();
+            AsbManager.ProcessDependancies(ref files);
+            var filesList = files.ToList();
+            var toReadFile = ProcessingSplitFiles(filesList);
             Load(toReadFile);
         }
 
@@ -55,8 +58,8 @@ namespace AssetStudio
 
             importFiles.Clear();
             importFilesHash.Clear();
-            noexistFiles.Clear();
             assetsFileListHash.Clear();
+            AsbManager.offsets.Clear();
 
             ReadAssets();
             ProcessAssets();
@@ -78,6 +81,9 @@ namespace AssetStudio
                 case FileType.BundleFile:
                     LoadBundleFile(reader);
                     break;
+                case FileType.BlkFile:
+                    LoadBlkFile(reader);
+                    break;
                 case FileType.WebFile:
                     LoadWebFile(reader);
                     break;
@@ -97,43 +103,13 @@ namespace AssetStudio
         {
             if (!assetsFileListHash.Contains(reader.FileName))
             {
-                Logger.Info($"Loading {reader.FullPath}");
+                Logger.Info($"Loading {reader.FileName}");
                 try
                 {
-                    var assetsFile = new SerializedFile(reader, this);
+                    var assetsFile = new SerializedFile(reader, this, reader.FullPath);
                     CheckStrippedVersion(assetsFile);
                     assetsFileList.Add(assetsFile);
                     assetsFileListHash.Add(assetsFile.fileName);
-
-                    foreach (var sharedFile in assetsFile.m_Externals)
-                    {
-                        var sharedFileName = sharedFile.fileName;
-
-                        if (!importFilesHash.Contains(sharedFileName))
-                        {
-                            var sharedFilePath = Path.Combine(Path.GetDirectoryName(reader.FullPath), sharedFileName);
-                            if (!noexistFiles.Contains(sharedFilePath))
-                            {
-                                if (!File.Exists(sharedFilePath))
-                                {
-                                    var findFiles = Directory.GetFiles(Path.GetDirectoryName(reader.FullPath), sharedFileName, SearchOption.AllDirectories);
-                                    if (findFiles.Length > 0)
-                                    {
-                                        sharedFilePath = findFiles[0];
-                                    }
-                                }
-                                if (File.Exists(sharedFilePath))
-                                {
-                                    importFiles.Add(sharedFilePath);
-                                    importFilesHash.Add(sharedFileName);
-                                }
-                                else
-                                {
-                                    noexistFiles.Add(sharedFilePath);
-                                }
-                            }
-                        }
-                    }
                 }
                 catch (Exception e)
                 {
@@ -156,7 +132,7 @@ namespace AssetStudio
                 {
                     var assetsFile = new SerializedFile(reader, this);
                     assetsFile.originalPath = originalPath;
-                    if (!string.IsNullOrEmpty(unityVersion) && assetsFile.header.m_Version < SerializedFileFormatVersion.Unknown_7)
+                    if (!string.IsNullOrEmpty(unityVersion) && assetsFile.header.m_Version < SerializedFileFormatVersion.kUnknown_7)
                     {
                         assetsFile.SetVersion(unityVersion);
                     }
@@ -346,6 +322,44 @@ namespace AssetStudio
             }
         }
 
+        private void LoadBlkFile(FileReader reader)
+        {
+            Logger.Info("Loading " + reader.FileName);
+            try
+            {
+                BlkFile blkFile;
+                reader.MHY0Pos = AsbManager.offsets[reader.FullPath].ToArray();
+                blkFile = new BlkFile(reader);
+                foreach (var mhy0 in blkFile.Files)
+                {
+                    foreach (var file in mhy0.fileList)
+                    {
+                        var dummyPath = Path.Combine(Path.GetDirectoryName(reader.FullPath), file.fileName);
+                        var cabReader = new FileReader(dummyPath, file.stream);
+                        if (cabReader.FileType == FileType.AssetsFile)
+                        {
+                            var assetsFile = new SerializedFile(cabReader, this, reader.FullPath);
+                            CheckStrippedVersion(assetsFile);
+                            assetsFileList.Add(assetsFile);
+                            assetsFileListHash.Add(assetsFile.fileName);
+                        }
+                        else
+                        {
+                            resourceFileReaders[file.fileName] = cabReader; //TODO
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.Error($"Error while reading blk file {reader.FileName}", e);
+            }
+            finally
+            {
+                reader.Dispose();
+            }
+        }
+
         public void CheckStrippedVersion(SerializedFile assetsFile)
         {
             if (assetsFile.IsVersionStripped && string.IsNullOrEmpty(SpecifyUnityVersion))
@@ -423,6 +437,9 @@ namespace AssetStudio
                             case ClassIDType.GameObject:
                                 obj = new GameObject(objectReader);
                                 break;
+                            case ClassIDType.IndexObject:
+                                obj = new IndexObject(objectReader);
+                                break;
                             case ClassIDType.Material:
                                 obj = new Material(objectReader);
                                 break;
@@ -433,7 +450,11 @@ namespace AssetStudio
                                 obj = new MeshFilter(objectReader);
                                 break;
                             case ClassIDType.MeshRenderer:
+                                if (!Renderer.Parsable) continue;
                                 obj = new MeshRenderer(objectReader);
+                                break;
+                            case ClassIDType.MiHoYoBinData:
+                                obj = new MiHoYoBinData(objectReader);
                                 break;
                             case ClassIDType.MonoBehaviour:
                                 obj = new MonoBehaviour(objectReader);
@@ -454,6 +475,7 @@ namespace AssetStudio
                                 obj = new Shader(objectReader);
                                 break;
                             case ClassIDType.SkinnedMeshRenderer:
+                                if (!Renderer.Parsable) continue;
                                 obj = new SkinnedMeshRenderer(objectReader);
                                 break;
                             case ClassIDType.Sprite:
@@ -539,7 +561,7 @@ namespace AssetStudio
                         }
                     }
                     else if (obj is SpriteAtlas m_SpriteAtlas)
-                    {
+                    {   
                         foreach (var m_PackedSprite in m_SpriteAtlas.m_PackedSprites)
                         {
                             if (m_PackedSprite.TryGet(out var m_Sprite))

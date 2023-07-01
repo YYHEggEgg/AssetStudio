@@ -18,23 +18,23 @@ namespace AssetStudio
 
     public enum SpritePackingRotation
     {
-        None = 0,
-        FlipHorizontal = 1,
-        FlipVertical = 2,
-        Rotate180 = 3,
-        Rotate90 = 4
+        kSPRNone = 0,
+        kSPRFlipHorizontal = 1,
+        kSPRFlipVertical = 2,
+        kSPRRotate180 = 3,
+        kSPRRotate90 = 4
     };
 
     public enum SpritePackingMode
     {
-        Tight = 0,
-        Rectangle
+        kSPMTight = 0,
+        kSPMRectangle
     };
 
     public enum SpriteMeshType
     {
-        FullRect,
-        Tight
+        kSpriteMeshTypeFullRect,
+        kSpriteMeshTypeTight
     };
 
     public class SpriteSettings

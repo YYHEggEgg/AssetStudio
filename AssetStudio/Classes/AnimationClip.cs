@@ -69,6 +69,19 @@ namespace AssetStudio
         }
     }
 
+    public class ACLClip
+    {
+        public byte[] m_ClipData;
+
+        public uint m_CurveCount;
+        public ACLClip(ObjectReader reader)
+        {
+            m_ClipData = reader.ReadUInt8Array();
+            reader.AlignStream();
+            m_CurveCount = reader.ReadUInt32();
+        }
+    }
+
     public class PackedFloatVector
     {
         public uint m_NumItems;
@@ -621,6 +634,7 @@ namespace AssetStudio
         public StreamedClip m_StreamedClip;
         public DenseClip m_DenseClip;
         public ConstantClip m_ConstantClip;
+        public ACLClip m_ACLClip;
         public ValueArrayConstant m_Binding;
 
         public Clip(ObjectReader reader)
@@ -632,6 +646,7 @@ namespace AssetStudio
             {
                 m_ConstantClip = new ConstantClip(reader);
             }
+            m_ACLClip = new ACLClip(reader);
             if (version[0] < 2018 || (version[0] == 2018 && version[1] < 3)) //2018.3 down
             {
                 m_Binding = new ValueArrayConstant(reader);
@@ -797,7 +812,6 @@ namespace AssetStudio
         public ClassIDType typeID;
         public byte customType;
         public byte isPPtrCurve;
-        public byte isIntCurve;
 
         public GenericBinding() { }
 
@@ -817,10 +831,6 @@ namespace AssetStudio
             }
             customType = reader.ReadByte();
             isPPtrCurve = reader.ReadByte();
-            if (version[0] > 2022 || (version[0] == 2022 && version[1] >= 1)) //2022.1 and up
-            {
-                isIntCurve = reader.ReadByte();
-            }
             reader.AlignStream();
         }
     }
@@ -914,9 +924,9 @@ namespace AssetStudio
 
     public enum AnimationType
     {
-        Legacy = 1,
-        Generic = 2,
-        Humanoid = 3
+        kLegacy = 1,
+        kGeneric = 2,
+        kHumanoid = 3
     };
 
     public sealed class AnimationClip : NamedObject
@@ -950,7 +960,7 @@ namespace AssetStudio
             else if (version[0] >= 4)//4.0 and up
             {
                 m_AnimationType = (AnimationType)reader.ReadInt32();
-                if (m_AnimationType == AnimationType.Legacy)
+                if (m_AnimationType == AnimationType.kLegacy)
                     m_Legacy = true;
             }
             else
@@ -1028,6 +1038,8 @@ namespace AssetStudio
             {
                 m_MuscleClipSize = reader.ReadUInt32();
                 m_MuscleClip = new ClipMuscleConstant(reader);
+                if (m_MuscleClip.m_Clip.m_ACLClip.m_CurveCount == 0)
+                    Logger.Info($"AnimationClip {m_Name} is exportable !!");
             }
             if (version[0] > 4 || (version[0] == 4 && version[1] >= 3)) //4.3 and up
             {

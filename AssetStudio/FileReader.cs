@@ -8,6 +8,7 @@ namespace AssetStudio
         public string FullPath;
         public string FileName;
         public FileType FileType;
+        public long Length;
 
         private static readonly byte[] gzipMagic = { 0x1f, 0x8b };
         private static readonly byte[] brotliMagic = { 0x62, 0x72, 0x6F, 0x74, 0x6C, 0x69 };
@@ -21,6 +22,14 @@ namespace AssetStudio
             FullPath = Path.GetFullPath(path);
             FileName = Path.GetFileName(path);
             FileType = CheckFileType();
+            Length = stream.Length;
+        }
+        public FileReader(Stream stream) : base(stream, EndianType.BigEndian)
+        {
+            FullPath = "";
+            FileName = "";
+            FileType = CheckFileType();
+            Length = stream.Length;
         }
 
         private FileType CheckFileType()
@@ -34,6 +43,8 @@ namespace AssetStudio
                 case "UnityArchive":
                 case "UnityFS":
                     return FileType.BundleFile;
+                case "blk":
+                    return FileType.BlkFile;
                 case "UnityWebData1.0":
                     return FileType.WebFile;
                 default:
